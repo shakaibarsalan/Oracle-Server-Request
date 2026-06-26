@@ -1,0 +1,109 @@
+name: Daily Provisioning Summary
+
+on:
+  schedule:
+    - cron: '59 23 * * *'   # every day at 23:59 UTC
+  workflow_dispatch:           # also allow manual trigger
+
+jobs:
+  summary:
+    name: Send daily summary email
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Fetch attempt logs and compile report
+        id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY=$(date -u +"%Y-%m-%d")
+          echo "DATE=$TODAY" >> $GITHUB_OUTPUT
+
+          # Fetch and parse attempts.json from logs branch using Python
+          RESP=$(gh api repos/${{ github.repository }}/contents/attempts.json \
+            -H "Accept: application/vnd.github.v3+json" \
+            --method GET -F ref=logs 2>/dev/null || echo "")
+
+          export TODAY
+          export RESP
+          python3 << 'PYEOF'
+          import json, os, base64, sys
+
+          today = os.environ.get("TODAY", "")
+          resp_str = os.environ.get("RESP", "")
+          output_file = os.environ.get("GITHUB_OUTPUT", "")
+
+          mumbai_count = 0
+          stockholm_count = 0
+          mumbai_success = False
+          stockholm_success = False
+          overall = "No data — log file not found"
+
+          if resp_str:
+              try:
+                  resp = json.loads(resp_str)
+                  content = base64.b64decode(resp["content"]).decode()
+                  data = json.loads(content)
+                  attempts = data.get("attempts", [])
+
+                  mumbai_today = [a for a in attempts if a.get("date") == today and a.get("region") == "mumbai"]
+                  stockholm_today = [a for a in attempts if a.get("date") == today and a.get("region") == "stockholm"]
+
+                  mumbai_count = len(mumbai_today)
+                  stockholm_count = len(stockholm_today)
+
+                  mumbai_success = any(a.get("result") == "VM_CREATED" for a in mumbai_today)
+                  stockholm_success = any(a.get("result") == "VM_CREATED" for a in stockholm_today)
+
+                  if mumbai_success and stockholm_success:
+                      overall = "Both VMs created successfully!"
+                  elif mumbai_success:
+                      overall = "Mumbai VM created. Stockholm still trying."
+                  elif stockholm_success:
+                      overall = "Stockholm VM created. Mumbai still trying."
+                  else:
+                      overall = "Both VMs still waiting for capacity."
+              except Exception as e:
+                  print(f"Warning: Could not parse attempts log: {e}", file=sys.stderr)
+
+          with open(output_file, "a") as out:
+              out.write(f"MUMBAI_ATTEMPTS={mumbai_count}\n")
+              out.write(f"MUMBAI_SUCCESS={'Yes' if mumbai_success else 'No'}\n")
+              out.write(f"STOCKHOLM_ATTEMPTS={stockholm_count}\n")
+              out.write(f"STOCKHOLM_SUCCESS={'Yes' if stockholm_success else 'No'}\n")
+              out.write(f"OVERALL={overall}\n")
+              out.write(f"DATE={today}\n")
+          PYEOF
+
+      - name: Send daily summary email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          password: ${{ secrets.NOTIFY_EMAIL_PASSWORD }}
+          subject: "📊 Oracle VM Daily Summary — ${{ steps.report.outputs.DATE }}"
+          to: ${{ secrets.NOTIFY_EMAIL_TO }}
+          from: "Oracle Provisioner <${{ secrets.NOTIFY_EMAIL_FROM }}>"
+          body: |
+            📊 Oracle VM Provisioning — Daily Summary
+            Date: ${{ steps.report.outputs.DATE }}
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            🇮🇳 Mumbai (ap-mumbai-1)
+              Attempts today: ${{ steps.report.outputs.MUMBAI_ATTEMPTS }}
+              VM Created: ${{ steps.report.outputs.MUMBAI_SUCCESS }}
+
+            🇸🇪 Stockholm (eu-stockholm-1)
+              Attempts today: ${{ steps.report.outputs.STOCKHOLM_ATTEMPTS }}
+              VM Created: ${{ steps.report.outputs.STOCKHOLM_SUCCESS }}
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            Overall Status: ${{ steps.report.outputs.OVERALL }}
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            This is an automated daily report from GitHub Actions.
+            Repo: https://github.com/${{ github.repository }}

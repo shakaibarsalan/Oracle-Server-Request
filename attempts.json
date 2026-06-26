@@ -1,0 +1,40 @@
+{
+  "attempts": [
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-26T16:14:09Z",
+      "date": "2026-06-26",
+      "result": "FAILED"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-26T16:17:56Z",
+      "date": "2026-06-26",
+      "result": "FAILED"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-26T18:00:13Z",
+      "date": "2026-06-26",
+      "result": "FAILED"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-26T18:03:03Z",
+      "date": "2026-06-26",
+      "result": "FAILED"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-26T19:50:34Z",
+      "date": "2026-06-26",
+      "result": "FAILED"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-26T20:03:20Z",
+      "date": "2026-06-26",
+      "result": "FAILED"
+    }
+  ]
+}

@@ -598,6 +598,14 @@
       "result": "FAILED",
       "attempts": 1,
       "reason": "ServiceError"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-27T15:20:06Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 1,
+      "reason": "Out of host capacity"
     }
   ]
 }

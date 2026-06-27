@@ -3,6 +3,9 @@ name: DIAG - show raw Oracle error
 on:
   workflow_dispatch:
 
+env:
+  SUPPRESS_LABEL_WARNING: "True"
+
 jobs:
   diag:
     name: Diagnose one launch attempt (both regions)
@@ -16,35 +19,25 @@ jobs:
           ./install.sh --accept-all-defaults
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      - name: Mumbai - one launch attempt with FULL error
+      - name: Mumbai - one clean launch attempt
         run: |
           set +e
+          export SUPPRESS_LABEL_WARNING=True
           mkdir -p ~/.oci
           echo "${{ secrets.MUMBAI_OCI_CONFIG }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/config
           echo "${{ secrets.MUMBAI_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
 
-          echo "===== AUTH CHECK (list compartments) ====="
-          oci iam compartment list --include-root --query 'data[0].id' --raw-output
-          echo "auth exit code: $?"
-
           COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
-          echo "COMPARTMENT_ID length: ${#COMPARTMENT_ID}"
-
-          echo "===== IMAGE LOOKUP ====="
           IMAGE_ID=$(oci compute image list \
             --compartment-id "$COMPARTMENT_ID" \
             --operating-system 'Canonical Ubuntu' \
             --operating-system-version '22.04' \
             --shape 'VM.Standard.A1.Flex' \
             --sort-by TIMECREATED \
-            --query 'data[0].id' --raw-output 2>&1)
-          echo "IMAGE_ID raw output: $IMAGE_ID"
+            --query 'data[0].id' --raw-output 2>/dev/null)
           echo "IMAGE_ID length: ${#IMAGE_ID}"
-
-          echo "===== SUBNET CHECK (does it exist / are we authorized?) ====="
-          oci network subnet get --subnet-id "${{ secrets.MUMBAI_SUBNET_OCID }}" --query 'data."lifecycle-state"' --raw-output 2>&1
-          echo "subnet get exit code: $?"
+          echo "IMAGE_ID starts with: ${IMAGE_ID:0:15}   (should be 'ocid1.image')"
 
           echo "===== ONE LAUNCH ATTEMPT - FULL RAW RESPONSE ====="
           SSH_KEY_FILE=$(mktemp)
@@ -63,29 +56,25 @@ jobs:
           echo "launch exit code: $?"
           echo "===== END MUMBAI ====="
 
-      - name: Stockholm - one launch attempt with FULL error
+      - name: Stockholm - one clean launch attempt
         run: |
           set +e
+          export SUPPRESS_LABEL_WARNING=True
           mkdir -p ~/.oci
           echo "${{ secrets.STOCKHOLM_OCI_CONFIG }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/config
           echo "${{ secrets.STOCKHOLM_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
 
           COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
-          echo "COMPARTMENT_ID length: ${#COMPARTMENT_ID}"
-
           IMAGE_ID=$(oci compute image list \
             --compartment-id "$COMPARTMENT_ID" \
             --operating-system 'Canonical Ubuntu' \
             --operating-system-version '22.04' \
             --shape 'VM.Standard.A1.Flex' \
             --sort-by TIMECREATED \
-            --query 'data[0].id' --raw-output 2>&1)
+            --query 'data[0].id' --raw-output 2>/dev/null)
           echo "IMAGE_ID length: ${#IMAGE_ID}"
-
-          echo "===== SUBNET CHECK ====="
-          oci network subnet get --subnet-id "${{ secrets.STOCKHOLM_SUBNET_OCID }}" --query 'data."lifecycle-state"' --raw-output 2>&1
-          echo "subnet get exit code: $?"
+          echo "IMAGE_ID starts with: ${IMAGE_ID:0:15}   (should be 'ocid1.image')"
 
           echo "===== ONE LAUNCH ATTEMPT - FULL RAW RESPONSE ====="
           SSH_KEY_FILE=$(mktemp)

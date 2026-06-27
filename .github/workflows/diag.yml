@@ -8,7 +8,7 @@ env:
 
 jobs:
   diag:
-    name: Diagnose one launch attempt (both regions)
+    name: Find the real availability domain + retry
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -19,7 +19,7 @@ jobs:
           ./install.sh --accept-all-defaults
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      - name: Mumbai - one clean launch attempt
+      - name: Mumbai - discover AD then launch
         run: |
           set +e
           export SUPPRESS_LABEL_WARNING=True
@@ -29,21 +29,22 @@ jobs:
           chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
 
           COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
-          IMAGE_ID=$(oci compute image list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --operating-system 'Canonical Ubuntu' \
-            --operating-system-version '22.04' \
-            --shape 'VM.Standard.A1.Flex' \
-            --sort-by TIMECREATED \
-            --query 'data[0].id' --raw-output 2>/dev/null)
-          echo "IMAGE_ID length: ${#IMAGE_ID}"
-          echo "IMAGE_ID starts with: ${IMAGE_ID:0:15}   (should be 'ocid1.image')"
 
-          echo "===== ONE LAUNCH ATTEMPT - FULL RAW RESPONSE ====="
+          echo "===== REAL AVAILABILITY DOMAIN NAMES ====="
+          oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[*].name' 2>/dev/null
+          REAL_AD=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[0].name' --raw-output 2>/dev/null)
+          echo "Using REAL_AD: $REAL_AD"
+
+          IMAGE_ID=$(oci compute image list --compartment-id "$COMPARTMENT_ID" \
+            --operating-system 'Canonical Ubuntu' --operating-system-version '22.04' \
+            --shape 'VM.Standard.A1.Flex' --sort-by TIMECREATED \
+            --query 'data[0].id' --raw-output 2>/dev/null)
+
+          echo "===== LAUNCH WITH REAL AD NAME ====="
           SSH_KEY_FILE=$(mktemp)
           printf '%s\n' "${{ secrets.SSH_PUBLIC_KEY }}" > "$SSH_KEY_FILE"
           oci compute instance launch \
-            --availability-domain "AP-MUMBAI-1-AD-1" \
+            --availability-domain "$REAL_AD" \
             --compartment-id "$COMPARTMENT_ID" \
             --shape "VM.Standard.A1.Flex" \
             --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
@@ -51,12 +52,11 @@ jobs:
             --subnet-id "${{ secrets.MUMBAI_SUBNET_OCID }}" \
             --assign-public-ip true \
             --ssh-authorized-keys-file "$SSH_KEY_FILE" \
-            --display-name "n8n-server" \
-            --fault-domain "FAULT-DOMAIN-1" 2>&1
+            --display-name "n8n-server" 2>&1
           echo "launch exit code: $?"
           echo "===== END MUMBAI ====="
 
-      - name: Stockholm - one clean launch attempt
+      - name: Stockholm - discover AD then launch
         run: |
           set +e
           export SUPPRESS_LABEL_WARNING=True
@@ -66,21 +66,22 @@ jobs:
           chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
 
           COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
-          IMAGE_ID=$(oci compute image list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --operating-system 'Canonical Ubuntu' \
-            --operating-system-version '22.04' \
-            --shape 'VM.Standard.A1.Flex' \
-            --sort-by TIMECREATED \
-            --query 'data[0].id' --raw-output 2>/dev/null)
-          echo "IMAGE_ID length: ${#IMAGE_ID}"
-          echo "IMAGE_ID starts with: ${IMAGE_ID:0:15}   (should be 'ocid1.image')"
 
-          echo "===== ONE LAUNCH ATTEMPT - FULL RAW RESPONSE ====="
+          echo "===== REAL AVAILABILITY DOMAIN NAMES ====="
+          oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[*].name' 2>/dev/null
+          REAL_AD=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[0].name' --raw-output 2>/dev/null)
+          echo "Using REAL_AD: $REAL_AD"
+
+          IMAGE_ID=$(oci compute image list --compartment-id "$COMPARTMENT_ID" \
+            --operating-system 'Canonical Ubuntu' --operating-system-version '22.04' \
+            --shape 'VM.Standard.A1.Flex' --sort-by TIMECREATED \
+            --query 'data[0].id' --raw-output 2>/dev/null)
+
+          echo "===== LAUNCH WITH REAL AD NAME ====="
           SSH_KEY_FILE=$(mktemp)
           printf '%s\n' "${{ secrets.SSH_PUBLIC_KEY }}" > "$SSH_KEY_FILE"
           oci compute instance launch \
-            --availability-domain "EU-STOCKHOLM-1-AD-1" \
+            --availability-domain "$REAL_AD" \
             --compartment-id "$COMPARTMENT_ID" \
             --shape "VM.Standard.A1.Flex" \
             --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
@@ -88,7 +89,6 @@ jobs:
             --subnet-id "${{ secrets.STOCKHOLM_SUBNET_OCID }}" \
             --assign-public-ip true \
             --ssh-authorized-keys-file "$SSH_KEY_FILE" \
-            --display-name "n8n-server" \
-            --fault-domain "FAULT-DOMAIN-1" 2>&1
+            --display-name "n8n-server" 2>&1
           echo "launch exit code: $?"
           echo "===== END STOCKHOLM ====="

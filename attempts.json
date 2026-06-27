@@ -606,6 +606,14 @@
       "result": "FAILED",
       "attempts": 1,
       "reason": "Out of host capacity"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-27T15:24:03Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 1,
+      "reason": "Connection timeout (transient)"
     }
   ]
 }

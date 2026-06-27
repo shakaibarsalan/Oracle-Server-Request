@@ -2,17 +2,33 @@ name: Provision Stockholm VM (Oracle Always Free)
 
 on:
   schedule:
-    - cron: '*/6 * * * *'   # every 6 minutes, 24/7
-  workflow_dispatch:           # also allow manual trigger
+    - cron: '0 * * * *'    # hourly trigger; each run then loops continuously for ~3h
+  workflow_dispatch:          # also allow manual trigger
 
 permissions:
-  contents: write              # needed to commit attempts.json to the logs branch
+  contents: write             # needed to commit attempts.json to the logs branch
+
+# Only one Stockholm run at a time. A new trigger waits and starts when the
+# current run ends, so runs chain back-to-back without piling up.
+concurrency:
+  group: provision-stockholm
+  cancel-in-progress: false
 
 jobs:
   provision:
     name: Try to create Stockholm VM
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 200
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REGION_NAME: stockholm
+      AVAILABILITY_DOMAIN: "EU-STOCKHOLM-1-AD-1"
+      SUBNET_OCID: ${{ secrets.STOCKHOLM_SUBNET_OCID }}
+      SSH_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+      LOOP_MINUTES: 180         # how long this run keeps retrying
+      RETRY_SECONDS: 30         # wait between retry cycles
+      HEARTBEAT_MINUTES: 15     # how often to log progress to attempts.json
 
     steps:
       - name: Install OCI CLI
@@ -29,129 +45,120 @@ jobs:
           echo "${{ secrets.STOCKHOLM_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
 
-      - name: Attempt to create VM
+      - name: Continuously attempt to create VM
         id: create_vm
         run: |
-          SUBNET_OCID="${{ secrets.STOCKHOLM_SUBNET_OCID }}"
-          SSH_KEY="${{ secrets.SSH_PUBLIC_KEY }}"
+          set -e
+          SSH_KEY_FILE=$(mktemp)
+          printf '%s\n' "$SSH_KEY" > "$SSH_KEY_FILE"
 
-          COMPARTMENT_ID=$(oci iam compartment list \
-            --include-root \
-            --query 'data[0].id' \
-            --raw-output)
-
+          COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output)
           IMAGE_ID=$(oci compute image list \
             --compartment-id "$COMPARTMENT_ID" \
             --operating-system 'Canonical Ubuntu' \
             --operating-system-version '22.04' \
             --shape 'VM.Standard.A1.Flex' \
             --sort-by TIMECREATED \
-            --query 'data[0].id' \
-            --raw-output)
-
+            --query 'data[0].id' --raw-output)
           echo "Compartment resolved."
           echo "Image resolved."
 
+          # Append one log entry to attempts.json on the logs branch.
+          # Args: $1 = result (FAILED|VM_CREATED), $2 = attempts in this window
+          log_attempt() {
+            local result="$1" count="$2"
+            local ts dt entry existing sha current updated encoded initial default_sha
+            ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            dt=$(date -u +"%Y-%m-%d")
+            entry=$(printf '{"region":"%s","timestamp":"%s","date":"%s","result":"%s","attempts":%s}' \
+              "$REGION_NAME" "$ts" "$dt" "$result" "$count")
+            local try
+            for try in 1 2 3; do
+              existing=$(gh api "repos/${GITHUB_REPOSITORY}/contents/attempts.json?ref=logs" 2>/dev/null || echo "")
+              if echo "$existing" | grep -q '"content"'; then
+                sha=$(printf '%s' "$existing" | python3 -c "import sys,json;print(json.load(sys.stdin)['sha'])")
+                current=$(printf '%s' "$existing" | python3 -c "import sys,json,base64;print(base64.b64decode(json.load(sys.stdin)['content']).decode())")
+                updated=$(printf '%s' "$current" | ENTRY="$entry" python3 -c "import sys,json,os;d=json.load(sys.stdin);d.setdefault('attempts',[]).append(json.loads(os.environ['ENTRY']));print(json.dumps(d,indent=2))")
+                encoded=$(printf '%s' "$updated" | base64 -w 0)
+                if gh api "repos/${GITHUB_REPOSITORY}/contents/attempts.json" --method PUT \
+                    -f message="Log ${REGION_NAME} +${count} attempts ${ts}" \
+                    -f content="$encoded" -f sha="$sha" -f branch="logs" >/dev/null 2>&1; then
+                  return 0
+                fi
+              else
+                default_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null || echo "")
+                [ -n "$default_sha" ] && gh api "repos/${GITHUB_REPOSITORY}/git/refs" --method POST \
+                  -f ref="refs/heads/logs" -f sha="$default_sha" >/dev/null 2>&1 || true
+                initial=$(ENTRY="$entry" python3 -c "import json,os;print(json.dumps({'attempts':[json.loads(os.environ['ENTRY'])]},indent=2))")
+                encoded=$(printf '%s' "$initial" | base64 -w 0)
+                if gh api "repos/${GITHUB_REPOSITORY}/contents/attempts.json" --method PUT \
+                    -f message="Init log ${REGION_NAME} ${ts}" \
+                    -f content="$encoded" -f branch="logs" >/dev/null 2>&1; then
+                  return 0
+                fi
+              fi
+              sleep $(( (RANDOM % 5) + 1 ))
+            done
+            return 0
+          }
+
+          END=$(( $(date +%s) + LOOP_MINUTES * 60 ))
+          HEARTBEAT_SECS=$(( HEARTBEAT_MINUTES * 60 ))
+          cycles=0
+          window=0
+          # Make the first heartbeat fire ~90s in (quick proof of life)
+          last_log=$(( $(date +%s) - HEARTBEAT_SECS + 90 ))
           SUCCESS=false
-          for FD in "FAULT-DOMAIN-1" "FAULT-DOMAIN-2" "FAULT-DOMAIN-3" "NO-FD"; do
-            if [ "$FD" = "NO-FD" ]; then
-              FD_FLAG=""
-              echo "Trying without fault domain..."
-            else
-              FD_FLAG="--fault-domain $FD"
-              echo "Trying $FD..."
-            fi
 
-            RESULT=$(oci compute instance launch \
-              --availability-domain "EU-STOCKHOLM-1-AD-1" \
-              --compartment-id "$COMPARTMENT_ID" \
-              --shape "VM.Standard.A1.Flex" \
-              --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
-              --image-id "$IMAGE_ID" \
-              --subnet-id "$SUBNET_OCID" \
-              --assign-public-ip true \
-              --ssh-authorized-keys-file <(echo "$SSH_KEY") \
-              --display-name "n8n-server" \
-              $FD_FLAG 2>&1) || true
+          set +e   # tolerate transient errors during the long loop
+          while [ "$(date +%s)" -lt "$END" ]; do
+            cycles=$((cycles + 1)); window=$((window + 1))
+            for FD in "FAULT-DOMAIN-1" "FAULT-DOMAIN-2" "FAULT-DOMAIN-3" "NO-FD"; do
+              if [ "$FD" = "NO-FD" ]; then FD_FLAG=""; else FD_FLAG="--fault-domain $FD"; fi
+              RESULT=$(oci compute instance launch \
+                --availability-domain "$AVAILABILITY_DOMAIN" \
+                --compartment-id "$COMPARTMENT_ID" \
+                --shape "VM.Standard.A1.Flex" \
+                --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
+                --image-id "$IMAGE_ID" \
+                --subnet-id "$SUBNET_OCID" \
+                --assign-public-ip true \
+                --ssh-authorized-keys-file "$SSH_KEY_FILE" \
+                --display-name "n8n-server" \
+                $FD_FLAG 2>&1) || true
+              if echo "$RESULT" | grep -q '"id"'; then
+                SUCCESS=true
+                PUBLIC_IP=$(echo "$RESULT" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('data',{}).get('public-ip','Check Oracle Console'))" 2>/dev/null || echo "Check Oracle Console")
+                echo "SUCCESS=true" >> $GITHUB_OUTPUT
+                echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
+                break
+              fi
+            done
 
-            if echo "$RESULT" | grep -q '"id"'; then
-              echo "SUCCESS=true" >> $GITHUB_OUTPUT
-              PUBLIC_IP=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('public-ip','Check Oracle Console'))" 2>/dev/null || echo "Check Oracle Console")
-              echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
-              echo "VM created successfully!"
-              echo "$RESULT"
-              SUCCESS=true
+            if [ "$SUCCESS" = "true" ]; then
+              log_attempt "VM_CREATED" "$window"
+              echo "🎉 VM created after $cycles cycles!"
               break
-            else
-              echo "Failed: $(echo "$RESULT" | grep -o 'Out of capacity\|LimitExceeded\|InternalError' | head -1)"
             fi
+
+            now=$(date +%s)
+            if [ $(( now - last_log )) -ge "$HEARTBEAT_SECS" ]; then
+              log_attempt "FAILED" "$window"
+              echo "Heartbeat: $cycles cycles total this run (logged $window this window). Still out of capacity."
+              window=0
+              last_log=$now
+            fi
+            sleep "$RETRY_SECONDS"
           done
 
-          if [ "$SUCCESS" = "false" ]; then
+          # Flush any remaining un-logged attempts
+          if [ "$SUCCESS" != "true" ]; then
+            [ "$window" -gt 0 ] && log_attempt "FAILED" "$window"
             echo "SUCCESS=false" >> $GITHUB_OUTPUT
-            echo "All attempts failed this round. Will retry in 6 minutes."
+            echo "No capacity this run after $cycles cycles. Next run will continue trying."
           fi
 
-      - name: Log attempt to logs branch
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          DATE=$(date -u +"%Y-%m-%d")
-          STATUS="${{ steps.create_vm.outputs.SUCCESS }}"
-          if [ "$STATUS" = "true" ]; then
-            RESULT_TEXT="VM_CREATED"
-          else
-            RESULT_TEXT="FAILED"
-          fi
-
-          LOG_ENTRY="{\"region\":\"stockholm\",\"timestamp\":\"$TIMESTAMP\",\"date\":\"$DATE\",\"result\":\"$RESULT_TEXT\"}"
-
-          RESP=$(gh api repos/${{ github.repository }}/contents/attempts.json \
-            -H "Accept: application/vnd.github.v3+json" \
-            --method GET -F ref=logs 2>/dev/null)
-          RC=$?
-
-          if [ $RC -eq 0 ] && echo "$RESP" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
-            CURRENT=$(echo "$RESP" | python3 -c "import sys,json,base64; d=json.load(sys.stdin); print(base64.b64decode(d['content']).decode())")
-            SHA=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
-            UPDATED=$(echo "$CURRENT" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          entry = json.loads('$LOG_ENTRY')
-          data['attempts'].append(entry)
-          print(json.dumps(data, indent=2))
-          ")
-            ENCODED=$(printf '%s' "$UPDATED" | base64 -w 0)
-            gh api repos/${{ github.repository }}/contents/attempts.json \
-              --method PUT \
-              -H "Accept: application/vnd.github.v3+json" \
-              -f message="Log Stockholm attempt $TIMESTAMP" \
-              -f content="$ENCODED" \
-              -f sha="$SHA" \
-              -f branch="logs"
-          else
-            DEFAULT_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha' 2>/dev/null || echo "")
-            if [ -n "$DEFAULT_SHA" ]; then
-              gh api repos/${{ github.repository }}/git/refs \
-                --method POST \
-                -f ref="refs/heads/logs" \
-                -f sha="$DEFAULT_SHA" 2>/dev/null || true
-            fi
-            INITIAL=$(printf '{"attempts":[%s]}' "$LOG_ENTRY")
-            ENCODED=$(printf '%s' "$INITIAL" | base64 -w 0)
-            gh api repos/${{ github.repository }}/contents/attempts.json \
-              --method PUT \
-              -H "Accept: application/vnd.github.v3+json" \
-              -f message="Init log with Stockholm attempt $TIMESTAMP" \
-              -f content="$ENCODED" \
-              -f branch="logs"
-          fi
-
-      - name: Send success email & disable workflow
+      - name: Send success email
         if: steps.create_vm.outputs.SUCCESS == 'true'
         uses: dawidd6/action-send-mail@v3
         with:

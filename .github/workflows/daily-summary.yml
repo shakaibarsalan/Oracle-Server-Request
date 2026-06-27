@@ -50,8 +50,10 @@ jobs:
                   mumbai_today = [a for a in attempts if a.get("date") == today and a.get("region") == "mumbai"]
                   stockholm_today = [a for a in attempts if a.get("date") == today and a.get("region") == "stockholm"]
 
-                  mumbai_count = len(mumbai_today)
-                  stockholm_count = len(stockholm_today)
+                  # Each entry carries an "attempts" count (retry cycles in that
+                  # window). Older entries without it count as 1.
+                  mumbai_count = sum(a.get("attempts", 1) for a in mumbai_today)
+                  stockholm_count = sum(a.get("attempts", 1) for a in stockholm_today)
 
                   mumbai_success = any(a.get("result") == "VM_CREATED" for a in mumbai_today)
                   stockholm_success = any(a.get("result") == "VM_CREATED" for a in stockholm_today)

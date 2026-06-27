@@ -1,0 +1,58 @@
+name: DIAG - Stockholm raw error
+
+on:
+  workflow_dispatch:
+
+env:
+  SUPPRESS_LABEL_WARNING: "True"
+
+jobs:
+  diag:
+    name: Stockholm raw error (real AD)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Stockholm - 3 launch attempts, full raw output
+        run: |
+          set +e
+          export SUPPRESS_LABEL_WARNING=True
+          mkdir -p ~/.oci
+          echo "${{ secrets.STOCKHOLM_OCI_CONFIG }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/config
+          echo "${{ secrets.STOCKHOLM_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+
+          COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
+          IMAGE_ID=$(oci compute image list --compartment-id "$COMPARTMENT_ID" \
+            --operating-system 'Canonical Ubuntu' --operating-system-version '22.04' \
+            --shape 'VM.Standard.A1.Flex' --sort-by TIMECREATED \
+            --query 'data[0].id' --raw-output 2>/dev/null)
+          AD=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[0].name' --raw-output 2>/dev/null)
+          echo "AD=$AD  IMAGE_len=${#IMAGE_ID}"
+          SSH_KEY_FILE=$(mktemp)
+          printf '%s\n' "${{ secrets.STOCKHOLM_SUBNET_OCID }}" >/dev/null
+          printf '%s\n' "${{ secrets.SSH_PUBLIC_KEY }}" > "$SSH_KEY_FILE"
+
+          for n in 1 2 3; do
+            echo "===== ATTEMPT $n ====="
+            oci compute instance launch \
+              --availability-domain "$AD" \
+              --compartment-id "$COMPARTMENT_ID" \
+              --shape "VM.Standard.A1.Flex" \
+              --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
+              --image-id "$IMAGE_ID" \
+              --subnet-id "${{ secrets.STOCKHOLM_SUBNET_OCID }}" \
+              --assign-public-ip true \
+              --ssh-authorized-keys-file "$SSH_KEY_FILE" \
+              --display-name "n8n-server" \
+              --fault-domain "FAULT-DOMAIN-1" 2>&1
+            echo "--- exit code: $? ---"
+            sleep 5
+          done
+          echo "===== END ====="

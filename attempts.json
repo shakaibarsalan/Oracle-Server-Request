@@ -534,6 +534,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "Out of host capacity"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-27T14:21:55Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "ServiceError"
     }
   ]
 }

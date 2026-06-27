@@ -510,6 +510,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "ServiceError"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-27T13:45:12Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Out of host capacity"
     }
   ]
 }

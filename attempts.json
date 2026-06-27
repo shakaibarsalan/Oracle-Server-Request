@@ -990,6 +990,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "Rate limited (will retry)"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-27T23:13:51Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Out of host capacity"
     }
   ]
 }

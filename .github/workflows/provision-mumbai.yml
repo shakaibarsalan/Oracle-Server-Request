@@ -136,10 +136,14 @@ jobs:
                 echo "SUCCESS=true" >> $GITHUB_OUTPUT
                 echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
                 break
-              elif echo "$RESULT" | grep -qi 'Out of host capacity\|Out of capacity'; then
+              elif echo "$RESULT" | grep -qi 'Out of host capacity\|Out of capacity\|OUT_OF_CAPACITY'; then
                 LAST_REASON="Out of host capacity"
+              elif echo "$RESULT" | grep -qi 'connection.*timed out\|timed out'; then
+                LAST_REASON="Connection timeout (transient)"
+              elif echo "$RESULT" | grep -qi 'TooManyRequests\|Too many requests'; then
+                LAST_REASON="Rate limited (will retry)"
               else
-                LAST_REASON=$(echo "$RESULT" | grep -oiE 'CannotParseRequest|NotAuthorized[A-Za-z]*|LimitExceeded|QuotaExceeded|TooManyRequests|InvalidParameter|InternalError|ServiceError' | head -1)
+                LAST_REASON=$(echo "$RESULT" | grep -oiE 'CannotParseRequest|NotAuthorized[A-Za-z]*|LimitExceeded|QuotaExceeded|InvalidParameter|InternalError|ServiceError' | head -1)
                 [ -z "$LAST_REASON" ] && LAST_REASON="other"
               fi
             done
@@ -157,7 +161,12 @@ jobs:
               window=0
               last_log=$now
             fi
-            sleep "$RETRY_SECONDS"
+            # Back off longer when Oracle rate-limits us, so we don't waste cycles
+            if [ "$LAST_REASON" = "Rate limited (will retry)" ]; then
+              sleep 60
+            else
+              sleep "$RETRY_SECONDS"
+            fi
           done
 
           # Flush any remaining un-logged attempts

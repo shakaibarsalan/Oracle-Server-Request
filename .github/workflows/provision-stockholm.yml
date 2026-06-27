@@ -23,7 +23,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REGION_NAME: stockholm
-      AVAILABILITY_DOMAIN: "EU-STOCKHOLM-1-AD-1"
+      SUPPRESS_LABEL_WARNING: "True"
       SUBNET_OCID: ${{ secrets.STOCKHOLM_SUBNET_OCID }}
       SSH_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
       LOOP_MINUTES: 180         # how long this run keeps retrying
@@ -49,6 +49,7 @@ jobs:
         id: create_vm
         run: |
           set -e
+          export SUPPRESS_LABEL_WARNING=True
           SSH_KEY_FILE=$(mktemp)
           printf '%s\n' "$SSH_KEY" > "$SSH_KEY_FILE"
 
@@ -60,18 +61,20 @@ jobs:
             --shape 'VM.Standard.A1.Flex' \
             --sort-by TIMECREATED \
             --query 'data[0].id' --raw-output)
-          echo "Compartment resolved."
-          echo "Image resolved."
+          # The real AD name has a tenancy-specific prefix (e.g. cQoa:EU-STOCKHOLM-1-AD-1);
+          # discover it instead of hardcoding, or Oracle rejects the request as malformed.
+          AVAILABILITY_DOMAIN=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[0].name' --raw-output)
+          echo "Compartment, image, and availability domain resolved."
 
           # Append one log entry to attempts.json on the logs branch.
-          # Args: $1 = result (FAILED|VM_CREATED), $2 = attempts in this window
+          # Args: $1 = result (FAILED|VM_CREATED), $2 = attempts in window, $3 = reason
           log_attempt() {
-            local result="$1" count="$2"
+            local result="$1" count="$2" reason="$3"
             local ts dt entry existing sha current updated encoded initial default_sha
             ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             dt=$(date -u +"%Y-%m-%d")
-            entry=$(printf '{"region":"%s","timestamp":"%s","date":"%s","result":"%s","attempts":%s}' \
-              "$REGION_NAME" "$ts" "$dt" "$result" "$count")
+            entry=$(printf '{"region":"%s","timestamp":"%s","date":"%s","result":"%s","attempts":%s,"reason":"%s"}' \
+              "$REGION_NAME" "$ts" "$dt" "$result" "$count" "$reason")
             local try
             for try in 1 2 3; do
               existing=$(gh api "repos/${GITHUB_REPOSITORY}/contents/attempts.json?ref=logs" 2>/dev/null || echo "")
@@ -109,6 +112,7 @@ jobs:
           # Make the first heartbeat fire ~90s in (quick proof of life)
           last_log=$(( $(date +%s) - HEARTBEAT_SECS + 90 ))
           SUCCESS=false
+          LAST_REASON="pending"
 
           set +e   # tolerate transient errors during the long loop
           while [ "$(date +%s)" -lt "$END" ]; do
@@ -132,19 +136,24 @@ jobs:
                 echo "SUCCESS=true" >> $GITHUB_OUTPUT
                 echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
                 break
+              elif echo "$RESULT" | grep -qi 'Out of host capacity\|Out of capacity'; then
+                LAST_REASON="Out of host capacity"
+              else
+                LAST_REASON=$(echo "$RESULT" | grep -oiE 'CannotParseRequest|NotAuthorized[A-Za-z]*|LimitExceeded|QuotaExceeded|TooManyRequests|InvalidParameter|InternalError|ServiceError' | head -1)
+                [ -z "$LAST_REASON" ] && LAST_REASON="other"
               fi
             done
 
             if [ "$SUCCESS" = "true" ]; then
-              log_attempt "VM_CREATED" "$window"
+              log_attempt "VM_CREATED" "$window" "created"
               echo "🎉 VM created after $cycles cycles!"
               break
             fi
 
             now=$(date +%s)
             if [ $(( now - last_log )) -ge "$HEARTBEAT_SECS" ]; then
-              log_attempt "FAILED" "$window"
-              echo "Heartbeat: $cycles cycles total this run (logged $window this window). Still out of capacity."
+              log_attempt "FAILED" "$window" "$LAST_REASON"
+              echo "Heartbeat: $cycles cycles this run (logged $window this window). Last reason: $LAST_REASON"
               window=0
               last_log=$now
             fi
@@ -153,9 +162,9 @@ jobs:
 
           # Flush any remaining un-logged attempts
           if [ "$SUCCESS" != "true" ]; then
-            [ "$window" -gt 0 ] && log_attempt "FAILED" "$window"
+            [ "$window" -gt 0 ] && log_attempt "FAILED" "$window" "$LAST_REASON"
             echo "SUCCESS=false" >> $GITHUB_OUTPUT
-            echo "No capacity this run after $cycles cycles. Next run will continue trying."
+            echo "Last reason this run: $LAST_REASON (after $cycles cycles). Next run continues."
           fi
 
       - name: Send success email

@@ -38,6 +38,8 @@ jobs:
           stockholm_count = 0
           mumbai_success = False
           stockholm_success = False
+          mumbai_reason = "n/a"
+          stockholm_reason = "n/a"
           overall = "No data — log file not found"
 
           if resp_str:
@@ -58,6 +60,14 @@ jobs:
                   mumbai_success = any(a.get("result") == "VM_CREATED" for a in mumbai_today)
                   stockholm_success = any(a.get("result") == "VM_CREATED" for a in stockholm_today)
 
+                  def last_reason(entries):
+                      for a in reversed(entries):
+                          if a.get("reason"):
+                              return a["reason"]
+                      return "n/a"
+                  mumbai_reason = last_reason(mumbai_today)
+                  stockholm_reason = last_reason(stockholm_today)
+
                   if mumbai_success and stockholm_success:
                       overall = "Both VMs created successfully!"
                   elif mumbai_success:
@@ -74,6 +84,8 @@ jobs:
               out.write(f"MUMBAI_SUCCESS={'Yes' if mumbai_success else 'No'}\n")
               out.write(f"STOCKHOLM_ATTEMPTS={stockholm_count}\n")
               out.write(f"STOCKHOLM_SUCCESS={'Yes' if stockholm_success else 'No'}\n")
+              out.write(f"MUMBAI_REASON={mumbai_reason}\n")
+              out.write(f"STOCKHOLM_REASON={stockholm_reason}\n")
               out.write(f"OVERALL={overall}\n")
               out.write(f"DATE={today}\n")
           PYEOF
@@ -97,10 +109,12 @@ jobs:
             🇮🇳 Mumbai (ap-mumbai-1)
               Attempts today: ${{ steps.report.outputs.MUMBAI_ATTEMPTS }}
               VM Created: ${{ steps.report.outputs.MUMBAI_SUCCESS }}
+              Last status: ${{ steps.report.outputs.MUMBAI_REASON }}
 
             🇸🇪 Stockholm (eu-stockholm-1)
               Attempts today: ${{ steps.report.outputs.STOCKHOLM_ATTEMPTS }}
               VM Created: ${{ steps.report.outputs.STOCKHOLM_SUCCESS }}
+              Last status: ${{ steps.report.outputs.STOCKHOLM_REASON }}
 
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

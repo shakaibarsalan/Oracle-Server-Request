@@ -462,6 +462,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "other"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-27T12:42:24Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "ServiceError"
     }
   ]
 }

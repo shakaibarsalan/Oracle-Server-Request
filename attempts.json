@@ -102,6 +102,13 @@
       "date": "2026-06-27",
       "result": "FAILED",
       "attempts": 2
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-27T05:40:56Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 1
     }
   ]
 }

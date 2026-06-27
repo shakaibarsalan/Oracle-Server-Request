@@ -878,6 +878,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "Connection timeout (transient)"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-27T20:58:30Z",
+      "date": "2026-06-27",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Rate limited (will retry)"
     }
   ]
 }

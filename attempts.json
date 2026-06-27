@@ -83,6 +83,12 @@
       "timestamp": "2026-06-27T01:32:30Z",
       "date": "2026-06-27",
       "result": "FAILED"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-27T01:47:57Z",
+      "date": "2026-06-27",
+      "result": "FAILED"
     }
   ]
 }

@@ -2006,6 +2006,14 @@
       "result": "FAILED",
       "attempts": 1,
       "reason": "Connection timeout (transient)"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-28T21:06:47Z",
+      "date": "2026-06-28",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Out of host capacity"
     }
   ]
 }

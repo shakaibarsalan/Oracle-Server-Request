@@ -1414,6 +1414,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "Connection timeout (transient)"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-28T09:21:06Z",
+      "date": "2026-06-28",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Rate limited (will retry)"
     }
   ]
 }

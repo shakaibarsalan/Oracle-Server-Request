@@ -2,7 +2,7 @@ name: Daily Provisioning Summary
 
 on:
   schedule:
-    - cron: '59 23 * * *'   # every day at 23:59 UTC
+    - cron: '59 23 * * *'   # ~end of day UTC (GitHub may delay; rolling 24h window handles it)
   workflow_dispatch:           # also allow manual trigger
 
 jobs:
@@ -17,77 +17,72 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TODAY=$(date -u +"%Y-%m-%d")
-          echo "DATE=$TODAY" >> $GITHUB_OUTPUT
-
-          # Fetch and parse attempts.json from logs branch using Python
           RESP=$(gh api repos/${{ github.repository }}/contents/attempts.json \
             -H "Accept: application/vnd.github.v3+json" \
             --method GET -F ref=logs 2>/dev/null || echo "")
-
-          export TODAY
           export RESP
           python3 << 'PYEOF'
           import json, os, base64, sys
+          from datetime import datetime, timezone, timedelta
 
-          today = os.environ.get("TODAY", "")
           resp_str = os.environ.get("RESP", "")
-          output_file = os.environ.get("GITHUB_OUTPUT", "")
+          out = {}
+          now = datetime.now(timezone.utc)
+          out["DATE"] = now.strftime("%Y-%m-%d %H:%M UTC")
 
-          mumbai_count = 0
-          stockholm_count = 0
-          mumbai_success = False
-          stockholm_success = False
-          mumbai_reason = "n/a"
-          stockholm_reason = "n/a"
-          overall = "No data — log file not found"
+          # defaults
+          for r in ("MUMBAI", "STOCKHOLM"):
+              out[f"{r}_24H"] = "0"
+              out[f"{r}_TOTAL"] = "0"
+              out[f"{r}_SUCCESS"] = "No"
+              out[f"{r}_REASON"] = "n/a"
+          out["OVERALL"] = "No data — log file not found"
 
           if resp_str:
               try:
-                  resp = json.loads(resp_str)
-                  content = base64.b64decode(resp["content"]).decode()
-                  data = json.loads(content)
+                  data = json.loads(base64.b64decode(json.loads(resp_str)["content"]).decode())
                   attempts = data.get("attempts", [])
+                  cutoff = now - timedelta(hours=24)
 
-                  mumbai_today = [a for a in attempts if a.get("date") == today and a.get("region") == "mumbai"]
-                  stockholm_today = [a for a in attempts if a.get("date") == today and a.get("region") == "stockholm"]
+                  def parse(ts):
+                      try:
+                          return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                      except Exception:
+                          return now
 
-                  # Each entry carries an "attempts" count (retry cycles in that
-                  # window). Older entries without it count as 1.
-                  mumbai_count = sum(a.get("attempts", 1) for a in mumbai_today)
-                  stockholm_count = sum(a.get("attempts", 1) for a in stockholm_today)
-
-                  mumbai_success = any(a.get("result") == "VM_CREATED" for a in mumbai_today)
-                  stockholm_success = any(a.get("result") == "VM_CREATED" for a in stockholm_today)
-
-                  def last_reason(entries):
-                      for a in reversed(entries):
+                  def stats(region):
+                      es = [a for a in attempts if a.get("region") == region]
+                      total = sum(a.get("attempts", 1) for a in es)
+                      last24 = sum(a.get("attempts", 1) for a in es if parse(a.get("timestamp", "")) >= cutoff)
+                      success = any(a.get("result") == "VM_CREATED" for a in es)
+                      reason = "n/a"
+                      for a in reversed(es):
                           if a.get("reason"):
-                              return a["reason"]
-                      return "n/a"
-                  mumbai_reason = last_reason(mumbai_today)
-                  stockholm_reason = last_reason(stockholm_today)
+                              reason = a["reason"]
+                              break
+                      return total, last24, success, reason
 
-                  if mumbai_success and stockholm_success:
-                      overall = "Both VMs created successfully!"
-                  elif mumbai_success:
-                      overall = "Mumbai VM created. Stockholm still trying."
-                  elif stockholm_success:
-                      overall = "Stockholm VM created. Mumbai still trying."
+                  m_total, m_24, m_ok, m_reason = stats("mumbai")
+                  s_total, s_24, s_ok, s_reason = stats("stockholm")
+                  out["MUMBAI_TOTAL"] = str(m_total); out["MUMBAI_24H"] = str(m_24)
+                  out["MUMBAI_SUCCESS"] = "Yes" if m_ok else "No"; out["MUMBAI_REASON"] = m_reason
+                  out["STOCKHOLM_TOTAL"] = str(s_total); out["STOCKHOLM_24H"] = str(s_24)
+                  out["STOCKHOLM_SUCCESS"] = "Yes" if s_ok else "No"; out["STOCKHOLM_REASON"] = s_reason
+
+                  if m_ok and s_ok:
+                      out["OVERALL"] = "Both VMs created successfully!"
+                  elif m_ok:
+                      out["OVERALL"] = "Mumbai VM created! Stockholm still trying."
+                  elif s_ok:
+                      out["OVERALL"] = "Stockholm VM created! Mumbai still trying."
                   else:
-                      overall = "Both VMs still waiting for capacity."
+                      out["OVERALL"] = "Both VMs still waiting for capacity (working correctly)."
               except Exception as e:
-                  print(f"Warning: Could not parse attempts log: {e}", file=sys.stderr)
+                  print(f"Warning: could not parse attempts log: {e}", file=sys.stderr)
 
-          with open(output_file, "a") as out:
-              out.write(f"MUMBAI_ATTEMPTS={mumbai_count}\n")
-              out.write(f"MUMBAI_SUCCESS={'Yes' if mumbai_success else 'No'}\n")
-              out.write(f"STOCKHOLM_ATTEMPTS={stockholm_count}\n")
-              out.write(f"STOCKHOLM_SUCCESS={'Yes' if stockholm_success else 'No'}\n")
-              out.write(f"MUMBAI_REASON={mumbai_reason}\n")
-              out.write(f"STOCKHOLM_REASON={stockholm_reason}\n")
-              out.write(f"OVERALL={overall}\n")
-              out.write(f"DATE={today}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              for k, v in out.items():
+                  f.write(f"{k}={v}\n")
           PYEOF
 
       - name: Send daily summary email
@@ -97,22 +92,24 @@ jobs:
           server_port: 465
           username: ${{ secrets.NOTIFY_EMAIL_FROM }}
           password: ${{ secrets.NOTIFY_EMAIL_PASSWORD }}
-          subject: "📊 Oracle VM Daily Summary — ${{ steps.report.outputs.DATE }}"
+          subject: "📊 Oracle VM Summary — ${{ steps.report.outputs.DATE }}"
           to: ${{ secrets.NOTIFY_EMAIL_TO }}
           from: "Oracle Provisioner <${{ secrets.NOTIFY_EMAIL_FROM }}>"
           body: |
-            📊 Oracle VM Provisioning — Daily Summary
-            Date: ${{ steps.report.outputs.DATE }}
+            📊 Oracle VM Provisioning — Summary
+            As of: ${{ steps.report.outputs.DATE }}
 
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             🇮🇳 Mumbai (ap-mumbai-1)
-              Attempts today: ${{ steps.report.outputs.MUMBAI_ATTEMPTS }}
+              Attempts (last 24h): ${{ steps.report.outputs.MUMBAI_24H }}
+              Attempts (total):    ${{ steps.report.outputs.MUMBAI_TOTAL }}
               VM Created: ${{ steps.report.outputs.MUMBAI_SUCCESS }}
               Last status: ${{ steps.report.outputs.MUMBAI_REASON }}
 
             🇸🇪 Stockholm (eu-stockholm-1)
-              Attempts today: ${{ steps.report.outputs.STOCKHOLM_ATTEMPTS }}
+              Attempts (last 24h): ${{ steps.report.outputs.STOCKHOLM_24H }}
+              Attempts (total):    ${{ steps.report.outputs.STOCKHOLM_TOTAL }}
               VM Created: ${{ steps.report.outputs.STOCKHOLM_SUCCESS }}
               Last status: ${{ steps.report.outputs.STOCKHOLM_REASON }}
 
@@ -121,5 +118,7 @@ jobs:
             Overall Status: ${{ steps.report.outputs.OVERALL }}
 
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            This is an automated daily report from GitHub Actions.
+            "last 24h" = attempts in the past 24 hours.
+            "total"    = all attempts since tracking began (should keep climbing).
+            Each attempt tries all fault domains. Automated report from GitHub Actions.
             Repo: https://github.com/${{ github.repository }}

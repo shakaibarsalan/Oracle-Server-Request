@@ -1,0 +1,48 @@
+name: DIAG - exists-path (Mumbai has 1 VM)
+
+on:
+  workflow_dispatch:
+
+env:
+  SUPPRESS_LABEL_WARNING: "True"
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Run the EXACT guard logic against Mumbai (has 1 VM)
+        run: |
+          set -eo pipefail
+          export SUPPRESS_LABEL_WARNING=True
+          mkdir -p ~/.oci
+          echo "${{ secrets.MUMBAI_OCI_CONFIG }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/config
+          echo "${{ secrets.MUMBAI_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+          COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output)
+
+          EXISTING=""
+          for chk in 1 2 3; do
+            if RAW=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" --all \
+                 --query "data[?\"display-name\"=='n8n-server' && \"lifecycle-state\"!='TERMINATED'].id" \
+                 --raw-output 2>/dev/null); then
+              EXISTING=$(printf '%s' "$RAW" | grep -c "ocid1.instance" || true)
+              break
+            fi
+            sleep 5
+          done
+          echo "EXISTING (count) = [$EXISTING]"
+          if [ -z "$EXISTING" ]; then
+            echo "DECISION: could not verify -> SKIP (safe)"
+          elif [ "$EXISTING" -gt 0 ] 2>/dev/null; then
+            echo "DECISION: VM exists -> SKIP + DISABLE (no duplicate) ✅"
+          else
+            echo "DECISION: none exist -> PROCEED to launch"
+          fi

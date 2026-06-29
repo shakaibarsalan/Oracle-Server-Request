@@ -19,7 +19,7 @@ jobs:
           ./install.sh --accept-all-defaults
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      - name: Query the instance
+      - name: Query all instances (OCID + IP + size each)
         run: |
           set +e
           export SUPPRESS_LABEL_WARNING=True
@@ -30,25 +30,26 @@ jobs:
 
           COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
 
-          echo "===== ALL INSTANCES (name / state / shape) ====="
-          oci compute instance list --compartment-id "$COMPARTMENT_ID" \
-            --query "data[].{name:\"display-name\", state:\"lifecycle-state\", shape:shape, created:\"time-created\"}" \
-            --output table 2>&1
+          # All non-terminated instances
+          IDS=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" \
+            --query "data[?\"lifecycle-state\"!='TERMINATED'].id" --raw-output 2>/dev/null \
+            | tr -d '[]," ' | tr '\n' ' ')
 
-          echo ""
-          echo "===== RUNNING n8n-server DETAILS ====="
-          INSTANCE_ID=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" \
-            --lifecycle-state RUNNING \
-            --query "data[?\"display-name\"=='n8n-server'].id | [0]" --raw-output 2>/dev/null)
-          echo "Instance OCID present: $([ -n "$INSTANCE_ID" ] && echo YES || echo NO)"
-          echo "State: $(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)"
-          echo "Shape: $(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data.shape' --raw-output 2>/dev/null)"
-
-          echo ""
-          echo "===== NETWORK (the part you need to SSH) ====="
-          PUBLIC_IP=$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" --query 'data[0]."public-ip"' --raw-output 2>/dev/null)
-          PRIVATE_IP=$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" --query 'data[0]."private-ip"' --raw-output 2>/dev/null)
-          echo "PUBLIC_IP=$PUBLIC_IP"
-          echo "PRIVATE_IP=$PRIVATE_IP"
-          echo ""
-          echo "If PUBLIC_IP is empty, the instance may have no public IP assigned."
+          i=0
+          for ID in $IDS; do
+            i=$((i+1))
+            echo "========== INSTANCE $i =========="
+            NAME=$(oci compute instance get --instance-id "$ID" --query 'data."display-name"' --raw-output 2>/dev/null)
+            STATE=$(oci compute instance get --instance-id "$ID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)
+            OCPUS=$(oci compute instance get --instance-id "$ID" --query 'data."shape-config".ocpus' --raw-output 2>/dev/null)
+            MEM=$(oci compute instance get --instance-id "$ID" --query 'data."shape-config"."memory-in-gbs"' --raw-output 2>/dev/null)
+            CREATED=$(oci compute instance get --instance-id "$ID" --query 'data."time-created"' --raw-output 2>/dev/null)
+            PUBIP=$(oci compute instance list-vnics --instance-id "$ID" --query 'data[0]."public-ip"' --raw-output 2>/dev/null)
+            echo "NAME=$NAME"
+            echo "STATE=$STATE"
+            echo "OCPUS=$OCPUS  MEMORY_GB=$MEM"
+            echo "CREATED=$CREATED"
+            echo "PUBLIC_IP=$PUBIP"
+            echo "OCID=$ID"
+          done
+          echo "========== TOTAL INSTANCES: $i =========="

@@ -3022,6 +3022,14 @@
       "result": "VM_CREATED",
       "attempts": 1,
       "reason": "created"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-29T21:46:20Z",
+      "date": "2026-06-29",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Out of host capacity"
     }
   ]
 }

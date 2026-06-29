@@ -3014,6 +3014,14 @@
       "result": "VM_CREATED",
       "attempts": 3,
       "reason": "created"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-29T21:41:53Z",
+      "date": "2026-06-29",
+      "result": "VM_CREATED",
+      "attempts": 1,
+      "reason": "created"
     }
   ]
 }

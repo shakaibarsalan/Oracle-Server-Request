@@ -67,15 +67,17 @@ jobs:
           AVAILABILITY_DOMAIN=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[0].name' --raw-output)
           echo "Compartment, image, and availability domain resolved."
 
-          # SAFETY: never create a second VM. Count existing n8n-server instances,
-          # retrying so a transient API error can't slip a duplicate through. If we
-          # cannot verify after retries, skip this run rather than risk a duplicate.
+          # SAFETY: never create a second VM. Count existing n8n-server instances.
+          # NOTE: with 0 instances the OCI CLI returns EMPTY output (exit 0) -- that
+          # means zero, NOT an error. So we count OCID lines (empty => 0) and only
+          # retry on a real non-zero failure; if still failing, skip to be safe.
           EXISTING=""
           for chk in 1 2 3; do
-            if CNT=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" \
-                 --query "length(data[?\"display-name\"=='n8n-server' && \"lifecycle-state\"!='TERMINATED'])" \
+            if RAW=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" --all \
+                 --query "data[?\"display-name\"=='n8n-server' && \"lifecycle-state\"!='TERMINATED'].id" \
                  --raw-output 2>/dev/null); then
-              EXISTING="$CNT"; break
+              EXISTING=$(printf '%s' "$RAW" | grep -c "ocid1.instance" || true)
+              break
             fi
             sleep 5
           done

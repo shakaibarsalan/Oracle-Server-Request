@@ -2150,6 +2150,14 @@
       "result": "FAILED",
       "attempts": 1,
       "reason": "Out of host capacity"
+    },
+    {
+      "region": "mumbai",
+      "timestamp": "2026-06-29T00:01:34Z",
+      "date": "2026-06-29",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Out of host capacity"
     }
   ]
 }

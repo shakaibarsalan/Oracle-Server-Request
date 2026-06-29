@@ -1,0 +1,54 @@
+name: Terminate duplicate Mumbai VM
+
+on:
+  workflow_dispatch:
+
+env:
+  SUPPRESS_LABEL_WARNING: "True"
+
+jobs:
+  terminate:
+    name: Terminate VM #2 (keep VM #1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Terminate the newer duplicate, keep the first
+        run: |
+          set +e
+          export SUPPRESS_LABEL_WARNING=True
+          mkdir -p ~/.oci
+          echo "${{ secrets.MUMBAI_OCI_CONFIG }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/config
+          echo "${{ secrets.MUMBAI_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+
+          KEEP="ocid1.instance.oc1.ap-mumbai-1.anrg6ljrzd42hyyckmw3tk4hxhj4ocwbnsdupdt6fgkz5tzmolf4hqugtp2q"   # VM #1  92.4.81.42 (21:25)
+          KILL="ocid1.instance.oc1.ap-mumbai-1.anrg6ljrzd42hyycwknyi5fcx4akfcytqx2o5ydpia5lseod5uxuvtgyebka"   # VM #2  141.148.195.179 (21:41)
+
+          echo "Terminating duplicate VM #2 (141.148.195.179) and deleting its boot volume..."
+          oci compute instance terminate --instance-id "$KILL" --preserve-boot-volume false --force 2>&1
+          echo "terminate exit: $?"
+
+          echo "Waiting for it to enter TERMINATING/TERMINATED..."
+          for n in 1 2 3 4 5 6; do
+            ST=$(oci compute instance get --instance-id "$KILL" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)
+            echo "  VM #2 state: $ST"
+            case "$ST" in TERMINATING|TERMINATED) break;; esac
+            sleep 10
+          done
+
+          echo ""
+          echo "===== REMAINING (non-terminated) INSTANCES ====="
+          COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
+          oci compute instance list --compartment-id "$COMPARTMENT_ID" \
+            --query "data[?\"lifecycle-state\"!='TERMINATED'].{name:\"display-name\", state:\"lifecycle-state\", ocpus:\"shape-config\".ocpus, id:id}" \
+            --output table 2>&1
+
+          echo ""
+          echo "Kept VM #1 state: $(oci compute instance get --instance-id "$KEEP" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)"

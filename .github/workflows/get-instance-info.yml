@@ -1,0 +1,54 @@
+name: Get Mumbai Instance Info
+
+on:
+  workflow_dispatch:
+
+env:
+  SUPPRESS_LABEL_WARNING: "True"
+
+jobs:
+  info:
+    name: Fetch n8n-server details
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Query the instance
+        run: |
+          set +e
+          export SUPPRESS_LABEL_WARNING=True
+          mkdir -p ~/.oci
+          echo "${{ secrets.MUMBAI_OCI_CONFIG }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/config
+          echo "${{ secrets.MUMBAI_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+
+          COMPARTMENT_ID=$(oci iam compartment list --include-root --query 'data[0].id' --raw-output 2>/dev/null)
+
+          echo "===== ALL INSTANCES (name / state / shape) ====="
+          oci compute instance list --compartment-id "$COMPARTMENT_ID" \
+            --query "data[].{name:\"display-name\", state:\"lifecycle-state\", shape:shape, created:\"time-created\"}" \
+            --output table 2>&1
+
+          echo ""
+          echo "===== RUNNING n8n-server DETAILS ====="
+          INSTANCE_ID=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" \
+            --lifecycle-state RUNNING \
+            --query "data[?\"display-name\"=='n8n-server'].id | [0]" --raw-output 2>/dev/null)
+          echo "Instance OCID present: $([ -n "$INSTANCE_ID" ] && echo YES || echo NO)"
+          echo "State: $(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)"
+          echo "Shape: $(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data.shape' --raw-output 2>/dev/null)"
+
+          echo ""
+          echo "===== NETWORK (the part you need to SSH) ====="
+          PUBLIC_IP=$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" --query 'data[0]."public-ip"' --raw-output 2>/dev/null)
+          PRIVATE_IP=$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" --query 'data[0]."private-ip"' --raw-output 2>/dev/null)
+          echo "PUBLIC_IP=$PUBLIC_IP"
+          echo "PRIVATE_IP=$PRIVATE_IP"
+          echo ""
+          echo "If PUBLIC_IP is empty, the instance may have no public IP assigned."

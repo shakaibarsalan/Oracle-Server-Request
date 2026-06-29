@@ -67,17 +67,30 @@ jobs:
           AVAILABILITY_DOMAIN=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" --query 'data[0].name' --raw-output)
           echo "Compartment, image, and availability domain resolved."
 
-          # SAFETY: never create a second VM. If an n8n-server already exists (any
-          # non-terminated state), disable this workflow and exit immediately.
-          EXISTING=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" \
-            --query "data[?\"display-name\"=='n8n-server' && \"lifecycle-state\"!='TERMINATED'].id" \
-            --raw-output 2>/dev/null | grep -c "ocid1.instance")
-          if [ "${EXISTING:-0}" -gt 0 ]; then
+          # SAFETY: never create a second VM. Count existing n8n-server instances,
+          # retrying so a transient API error can't slip a duplicate through. If we
+          # cannot verify after retries, skip this run rather than risk a duplicate.
+          EXISTING=""
+          for chk in 1 2 3; do
+            if CNT=$(oci compute instance list --compartment-id "$COMPARTMENT_ID" \
+                 --query "length(data[?\"display-name\"=='n8n-server' && \"lifecycle-state\"!='TERMINATED'])" \
+                 --raw-output 2>/dev/null); then
+              EXISTING="$CNT"; break
+            fi
+            sleep 5
+          done
+          if [ -z "$EXISTING" ]; then
+            echo "Could not verify existing instances after retries; skipping launch this run to be safe."
+            echo "SUCCESS=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ "$EXISTING" -gt 0 ] 2>/dev/null; then
             echo "An n8n-server already exists ($EXISTING). Not launching. Disabling workflow."
             gh workflow disable provision-mumbai.yml >/dev/null 2>&1 || true
             echo "SUCCESS=false" >> $GITHUB_OUTPUT
             exit 0
           fi
+          echo "No existing n8n-server found. Proceeding to provision."
 
           # Append one log entry to attempts.json on the logs branch.
           # Args: $1 = result (FAILED|VM_CREATED), $2 = attempts in window, $3 = reason

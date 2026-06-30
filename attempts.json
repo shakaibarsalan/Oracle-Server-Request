@@ -3374,6 +3374,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "Out of host capacity"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-06-30T12:54:55Z",
+      "date": "2026-06-30",
+      "result": "FAILED",
+      "attempts": 1,
+      "reason": "Out of host capacity"
     }
   ]
 }

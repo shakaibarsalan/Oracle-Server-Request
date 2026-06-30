@@ -1,0 +1,59 @@
+name: Resize boot volume to 100GB
+
+on:
+  workflow_dispatch:
+
+env:
+  SUPPRESS_LABEL_WARNING: "True"
+
+jobs:
+  resize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Resize boot volume of the running n8n-server to 100 GB
+        run: |
+          set +e
+          export SUPPRESS_LABEL_WARNING=True
+          mkdir -p ~/.oci
+          echo "${{ secrets.MUMBAI_OCI_CONFIG }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/config
+          echo "${{ secrets.MUMBAI_OCI_KEY }}" | sed '1s/^\xEF\xBB\xBF//' > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+
+          INSTANCE_ID="ocid1.instance.oc1.ap-mumbai-1.anrg6ljrzd42hyyckmw3tk4hxhj4ocwbnsdupdt6fgkz5tzmolf4hqugtp2q"
+          AD=$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."availability-domain"' --raw-output)
+          CID=$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)
+          echo "AD=$AD"
+
+          BV_ID=$(oci compute boot-volume-attachment list \
+            --availability-domain "$AD" --compartment-id "$CID" --instance-id "$INSTANCE_ID" \
+            --query 'data[0]."boot-volume-id"' --raw-output)
+          echo "Boot volume: $BV_ID"
+
+          CUR=$(oci bv boot-volume get --boot-volume-id "$BV_ID" --query 'data."size-in-gbs"' --raw-output)
+          echo "Current size: ${CUR} GB"
+
+          if [ "$CUR" -ge 100 ] 2>/dev/null; then
+            echo "Already >= 100 GB; nothing to do."
+          else
+            echo "Resizing to 100 GB..."
+            oci bv boot-volume update --boot-volume-id "$BV_ID" --size-in-gbs 100 --force 2>&1
+            echo "update exit: $?"
+          fi
+
+          echo "Waiting for resize to apply..."
+          for n in 1 2 3 4 5 6; do
+            NEW=$(oci bv boot-volume get --boot-volume-id "$BV_ID" --query 'data."size-in-gbs"' --raw-output 2>/dev/null)
+            STATE=$(oci bv boot-volume get --boot-volume-id "$BV_ID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)
+            echo "  size=${NEW} GB  state=${STATE}"
+            [ "$NEW" = "100" ] && [ "$STATE" = "AVAILABLE" ] && break
+            sleep 10
+          done
+          echo "DONE. New boot volume size: ${NEW} GB"

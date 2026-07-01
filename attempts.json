@@ -3910,6 +3910,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "Connection timeout (transient)"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-07-01T11:38:57Z",
+      "date": "2026-07-01",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Out of host capacity"
     }
   ]
 }

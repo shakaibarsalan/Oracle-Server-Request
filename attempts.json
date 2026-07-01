@@ -3798,6 +3798,14 @@
       "result": "FAILED",
       "attempts": 3,
       "reason": "Rate limited (will retry)"
+    },
+    {
+      "region": "stockholm",
+      "timestamp": "2026-07-01T05:52:20Z",
+      "date": "2026-07-01",
+      "result": "FAILED",
+      "attempts": 3,
+      "reason": "Rate limited (will retry)"
     }
   ]
 }
